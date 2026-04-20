@@ -1,0 +1,53 @@
+# ================================
+# Node.js / JavaScript / Frontend
+# ================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+.pnpm-debug.log*
+.next/
+out/
+
+# ================================
+# General / IDE / OS
+# ================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-*
+*.code-workspace
+.history/
+
+# ================================
+# Docker / Compose
+# ================================
+docker-compose.override.yml
+*.pid
+*.seed
+*.pid.lock
+
+# ================================
+# Secrets & Environment
+# ================================
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# ================================
+# Coverage & Reports
+# ================================
+coverage/
+*.cover
+.coverage.*
+test-results/
+results/
