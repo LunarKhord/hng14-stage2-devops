@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   # ──────────────────────────────────────────────────
   # Stage 1: Lint
@@ -88,6 +92,7 @@ jobs:
         with:
           name: coverage-report
           path: api/coverage.xml
+
 
   # ──────────────────────────────────────────────────
   # Stage 3: Build (FIXED: build locally + load, then docker save)
