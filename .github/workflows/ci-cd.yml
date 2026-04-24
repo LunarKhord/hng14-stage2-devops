@@ -87,57 +87,57 @@ jobs:
           path: api/coverage.xml
 
   # ──────────────────────────────────────────────────
-  # Stage 3: Build
+  # Stage 3: Build (FIXED)
   # ──────────────────────────────────────────────────
   build:
     needs: test
     runs-on: ubuntu-latest
-    services:
-      registry:
-        image: registry:2
-        ports:
-          - 5000:5000
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
 
-      - name: Build and push API image
+      - name: Build API image (local)
         uses: docker/build-push-action@v5
         with:
           context: ./api
-          push: true
+          push: false
+          load: true
           tags: |
-            localhost:5000/api:${{ github.sha }}
-            localhost:5000/api:latest
+            api:${{ github.sha }}
+            api:latest
 
-      - name: Build and push Worker image
+      - name: Build Worker image (local)
         uses: docker/build-push-action@v5
         with:
           context: ./worker
-          push: true
+          push: false
+          load: true
           tags: |
-            localhost:5000/worker:${{ github.sha }}
-            localhost:5000/worker:latest
+            worker:${{ github.sha }}
+            worker:latest
 
-      - name: Build and push Frontend image
+      - name: Build Frontend image (local)
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
-          push: true
+          push: false
+          load: true
           tags: |
-            localhost:5000/frontend:${{ github.sha }}
-            localhost:5000/frontend:latest
+            frontend:${{ github.sha }}
+            frontend:latest
+
+      - name: Debug built images
+        run: |
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | sed -n '1p;/^api\|^worker\|^frontend/p'
 
       - name: Save images as tarballs
         run: |
-          docker save localhost:5000/api:${{ github.sha }} -o api.tar
-          docker save localhost:5000/worker:${{ github.sha }} -o worker.tar
-          docker save localhost:5000/frontend:${{ github.sha }} -o frontend.tar
+          docker save api:${{ github.sha }} -o api.tar
+          docker save worker:${{ github.sha }} -o worker.tar
+          docker save frontend:${{ github.sha }} -o frontend.tar
 
       - name: Upload image artifacts
         uses: actions/upload-artifact@v4
@@ -194,10 +194,21 @@ jobs:
           severity: 'CRITICAL'
           exit-code: '1'
 
-      - name: Upload SARIF results
+      # upload-sarif only takes ONE file per step; do 3 steps
+      - name: Upload SARIF (API)
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results-api.sarif,trivy-results-worker.sarif,trivy-results-frontend.sarif'
+          sarif_file: trivy-results-api.sarif
+
+      - name: Upload SARIF (Worker)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results-worker.sarif
+
+      - name: Upload SARIF (Frontend)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results-frontend.sarif
 
   # ──────────────────────────────────────────────────
   # Stage 5: Integration Test
@@ -264,6 +275,8 @@ jobs:
       - name: Set up Docker Compose
         run: docker compose version
 
+      # NOTE: these localhost:5000 pulls only work if you have a real reachable registry in deploy env.
+      # Keeping your logic as-is, but this won't pull anything in GitHub-hosted runners.
       - name: Pull latest images (old version)
         run: |
           docker pull localhost:5000/api:latest || true
