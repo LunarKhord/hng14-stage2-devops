@@ -93,7 +93,6 @@ jobs:
           name: coverage-report
           path: api/coverage.xml
 
-
   # ──────────────────────────────────────────────────
   # Stage 3: Build (FIXED: build locally + load, then docker save)
   # ──────────────────────────────────────────────────
@@ -164,6 +163,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # FIX: checkout so upload-sarif can fingerprint with git context (avoids "not a git repo" warning)
+      - name: Checkout code
+        uses: actions/checkout@v5
+
       - name: Download image artifacts
         uses: actions/download-artifact@v4
         with:
@@ -203,20 +206,24 @@ jobs:
           exit-code: "0"
 
       # upload-sarif supports a single file per step
+      # FIX: unique category per upload to avoid "only one run ... per job per tool/category"
       - name: Upload SARIF (API)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results-api.sarif
+          category: trivy-api
 
       - name: Upload SARIF (Worker)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results-worker.sarif
+          category: trivy-worker
 
       - name: Upload SARIF (Frontend)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results-frontend.sarif
+          category: trivy-frontend
 
   # ──────────────────────────────────────────────────
   # Stage 5: Integration Test
