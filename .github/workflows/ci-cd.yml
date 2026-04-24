@@ -1,0 +1,188 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # Lint
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Lint Python
+        run: pip install flake8 && flake8 api/ || true
+      - name: Lint JavaScript
+        run: cd frontend && npm install eslint --save-dev && npx eslint app.js || true
+      - name: Lint Dockerfiles
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: "**/Dockerfile"
+
+  # Test
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: cd api && pip install -r requirements.txt && pip install pytest pytest-cov fakeredis httpx
+      - name: Run tests
+        run: cd api && pytest --cov=app --cov-report=xml:coverage.xml
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: api/coverage.xml
+
+  # Build
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+      - name: Build & push API
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: localhost:5000/api:${{ github.sha }},localhost:5000/api:latest
+      - name: Build & push Worker
+        uses: docker/build-push-action@v5
+        with:
+          context: ./worker
+          push: true
+          tags: localhost:5000/worker:${{ github.sha }},localhost:5000/worker:latest
+      - name: Build & push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: localhost:5000/frontend:${{ github.sha }},localhost:5000/frontend:latest
+      - name: Save images
+        run: |
+          docker save localhost:5000/api:${{ github.sha }} -o api.tar
+          docker save localhost:5000/worker:${{ github.sha }} -o worker.tar
+          docker save localhost:5000/frontend:${{ github.sha }} -o frontend.tar
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: "*.tar"
+
+  # Security scan
+  security-scan:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+      - name: Load images
+        run: docker load -i api.tar && docker load -i worker.tar && docker load -i frontend.tar
+      - name: Scan API
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: api:${{ github.sha }}
+          format: 'sarif'
+          output: trivy-api.sarif
+          severity: CRITICAL
+          exit-code: '1'
+      - name: Scan Worker
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: worker:${{ github.sha }}
+          format: 'sarif'
+          output: trivy-worker.sarif
+          severity: CRITICAL
+          exit-code: '1'
+      - name: Scan Frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: frontend:${{ github.sha }}
+          format: 'sarif'
+          output: trivy-frontend.sarif
+          severity: CRITICAL
+          exit-code: '1'
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-api.sarif,trivy-worker.sarif,trivy-frontend.sarif
+
+  # Integration test
+  integration-test:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Start stack
+        run: docker compose up -d
+      - name: Wait for services
+        run: |
+          for i in {1..12}; do
+            HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l)
+            [ "$HEALTHY" -ge 4 ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Submit job
+        run: echo "JOB_ID=$(curl -s -X POST http://localhost:3000/submit | jq -r '.job_id')" >> $GITHUB_ENV
+      - name: Poll job
+        run: |
+          for i in {1..30}; do
+            STATUS=$(curl -s http://localhost:3000/status/${{ env.JOB_ID }} | jq -r '.status')
+            [ "$STATUS" = "completed" ] && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  # Deploy (only main)
+  deploy:
+    needs: integration-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Start old stack
+        run: docker compose -p old up -d
+      - name: Build new
+        run: docker compose build
+      - name: Start new stack
+        run: docker compose -p new up -d
+      - name: Wait new healthy
+        run: |
+          for i in {1..12}; do
+            HEALTHY=$(docker compose -p new ps --format json | jq 'select(.Health == "healthy")' | wc -l)
+            [ "$HEALTHY" -ge 4 ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Switch traffic
+        run: docker compose -p old down
+      - name: Rollback on failure
+        if: failure()
+        run: docker compose -p new down && docker compose -p old up -d

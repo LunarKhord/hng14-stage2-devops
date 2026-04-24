@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import redis.asyncio as redis
 import uuid
 import os
@@ -22,5 +22,10 @@ async def create_job():
 async def get_job(job_id: str):
     status = await r.hget(f"job:{job_id}", "status")
     if not status:
-        return {"error": "not found"}
-    return {"job_id": job_id, "status": status.decode()}
+        raise HTTPException(status_code=404, detail="not found")
+    return {"job_id": job_id, "status": status}
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}

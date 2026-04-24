@@ -1,0 +1,97 @@
+version: '3.8'
+
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: redis
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  api:
+    build: ./api
+    container_name: api
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+
+  worker:
+    build: ./worker
+    container_name: worker
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*worker.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - API_URL=http://api:8000
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M                          
+
+
+networks:
+  internal:
+    name: hng-stage2-internal
+    driver: bridge

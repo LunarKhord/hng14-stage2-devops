@@ -29,7 +29,23 @@ app.get('/status/:id', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Frontend running on port ${PORT}`);
+
+app.get('/health', async (req, res) => {
+  try {
+    const response = await axios.get(`${API_URL}/health`);
+    res.status(200).json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: "something went wrong" });
+  }
 });
+
+// Export for testing
+module.exports = app;
+
+// Start server only when run directly (not imported)
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Frontend running on port ${PORT}`);
+  });
+}
