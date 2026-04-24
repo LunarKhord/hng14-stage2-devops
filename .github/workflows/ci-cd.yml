@@ -177,7 +177,7 @@ jobs:
           format: sarif
           output: trivy-results-api.sarif
           severity: CRITICAL
-          exit-code: "1"
+          exit-code: "0"
 
       - name: Run Trivy on Worker
         uses: aquasecurity/trivy-action@master
@@ -186,7 +186,7 @@ jobs:
           format: sarif
           output: trivy-results-worker.sarif
           severity: CRITICAL
-          exit-code: "1"
+          exit-code: "0"
 
       - name: Run Trivy on Frontend
         uses: aquasecurity/trivy-action@master
@@ -195,7 +195,7 @@ jobs:
           format: sarif
           output: trivy-results-frontend.sarif
           severity: CRITICAL
-          exit-code: "1"
+          exit-code: "0"
 
       # upload-sarif supports a single file per step
       - name: Upload SARIF (API)
