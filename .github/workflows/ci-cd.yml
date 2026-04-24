@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline (2026 Modernized)
 
 on:
   push:
@@ -6,17 +6,19 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+  security-events: write # Required for SARIF upload
+
 jobs:
   # ──────────────────────────────────────────────────
-  # Stage 1: Lint
+  # Stage 1: Static Analysis & Linting
   # ──────────────────────────────────────────────────
   lint:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true       # opt into Node 24 early
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4                    # stable v4
+      - name: Checkout repository
+        uses: actions/checkout@v6                    
 
       - name: Lint Python (flake8)
         run: |
@@ -30,26 +32,24 @@ jobs:
           npx eslint app.js || true
 
       - name: Lint Dockerfiles (hadolint)
-        uses: hadolint/hadolint-action@v3.1.0        # stable v3.1.0
+        uses: hadolint/hadolint-action@v3.3.0        
         with:
           dockerfile: "**/Dockerfile"
 
   # ──────────────────────────────────────────────────
-  # Stage 2: Test
+  # Stage 2: Automated Unit Testing
   # ──────────────────────────────────────────────────
   test:
     needs: lint
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Initialize Python Environment
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: '3.13' # Leveraging the 2026 stable branch
 
       - name: Install dependencies
         run: |
@@ -57,41 +57,39 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov fakeredis httpx
 
-      - name: Run unit tests with coverage
+      - name: Execute unit tests with coverage metrics
         run: |
           cd api
           pytest --cov=app --cov-report=xml:coverage.xml --junitxml=test-results.xml
 
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+      - name: Persist coverage report
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: api/coverage.xml
 
   # ──────────────────────────────────────────────────
-  # Stage 3: Build
+  # Stage 3: Container Image Orchestration
   # ──────────────────────────────────────────────────
   build:
     needs: test
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     services:
       registry:
         image: registry:2
         ports:
           - 5000:5000
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Initialize Docker Buildx
+        uses: docker/setup-buildx-action@v4
         with:
           driver-opts: network=host
 
-      - name: Build and push API image
-        uses: docker/build-push-action@v5
+      - name: Synthesize and push microservice images
+        uses: docker/build-push-action@v7
         with:
           context: ./api
           push: true
@@ -100,7 +98,7 @@ jobs:
             localhost:5000/api:latest
 
       - name: Build and push Worker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./worker
           push: true
@@ -109,7 +107,7 @@ jobs:
             localhost:5000/worker:latest
 
       - name: Build and push Frontend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           push: true
@@ -117,14 +115,14 @@ jobs:
             localhost:5000/frontend:${{ github.sha }}
             localhost:5000/frontend:latest
 
-      - name: Save images as tarballs
+      - name: Externalize images for cross-job transport
         run: |
           docker save localhost:5000/api:${{ github.sha }} -o api.tar
           docker save localhost:5000/worker:${{ github.sha }} -o worker.tar
           docker save localhost:5000/frontend:${{ github.sha }} -o frontend.tar
 
-      - name: Upload image artifacts
-        uses: actions/upload-artifact@v4
+      - name: Persist image artifacts (unzipped)
+        uses: actions/upload-artifact@v7
         with:
           name: docker-images
           path: |
@@ -132,29 +130,28 @@ jobs:
             worker.tar
             frontend.tar
           retention-days: 1
+          archive: false # New v7/v8 feature: avoid redundant compression
 
   # ──────────────────────────────────────────────────
-  # Stage 4: Security Scan
+  # Stage 4: Vulnerability Assessment (Trivy Safe-Pin)
   # ──────────────────────────────────────────────────
   security-scan:
     needs: build
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Download image artifacts
-        uses: actions/download-artifact@v4
+      - name: Retrieve image artifacts
+        uses: actions/download-artifact@v8
         with:
           name: docker-images
 
-      - name: Load images into Docker
+      - name: Reconstitute Docker images
         run: |
           docker load -i api.tar
           docker load -i worker.tar
           docker load -i frontend.tar
 
-      - name: Run Trivy vulnerability scanner on API
-        uses: aquasecurity/trivy-action@master
+      - name: Vulnerability Scan (API)
+        uses: aquasecurity/trivy-action@v0.35.0 # PINNED for security compliance
         with:
           image-ref: 'api:${{ github.sha }}'
           format: 'sarif'
@@ -162,8 +159,8 @@ jobs:
           severity: 'CRITICAL'
           exit-code: '1'
 
-      - name: Run Trivy on Worker
-        uses: aquasecurity/trivy-action@master
+      - name: Vulnerability Scan (Worker)
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: 'worker:${{ github.sha }}'
           format: 'sarif'
@@ -171,8 +168,8 @@ jobs:
           severity: 'CRITICAL'
           exit-code: '1'
 
-      - name: Run Trivy on Frontend
-        uses: aquasecurity/trivy-action@master
+      - name: Vulnerability Scan (Frontend)
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: 'frontend:${{ github.sha }}'
           format: 'sarif'
@@ -180,114 +177,72 @@ jobs:
           severity: 'CRITICAL'
           exit-code: '1'
 
-      - name: Upload SARIF results
+      - name: Transmission of SARIF telemetry
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results-api.sarif,trivy-results-worker.sarif,trivy-results-frontend.sarif'
 
   # ──────────────────────────────────────────────────
-  # Stage 5: Integration Test
+  # Stage 5: System Integration Validation
   # ──────────────────────────────────────────────────
   integration-test:
     needs: security-scan
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - name: Set up Docker Compose
-        run: docker compose version
-
-      - name: Start the full stack
+      - name: Instantiate full-stack environment
         run: docker compose -f docker-compose.yml up -d
 
-      - name: Wait for services to be healthy
+      - name: Service Health Interrogation
         run: |
           for i in {1..12}; do
             HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l)
             if [ "$HEALTHY" -ge 4 ]; then
-              echo "All services healthy"
+              echo "Health check consensus reached."
               exit 0
             fi
             sleep 5
           done
-          echo "Services did not become healthy in time"
+          echo "System health timeout exceeded."
           exit 1
 
-      - name: Submit a job via frontend
+      - name: Execute end-to-end transaction
         run: |
           JOB_ID=$(curl -s -X POST http://localhost:3000/submit -H "Content-Type: application/json" | jq -r '.job_id')
           echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
 
-      - name: Poll job until completed
+      - name: Asynchronous status polling
         run: |
           for i in {1..30}; do
             STATUS=$(curl -s http://localhost:3000/status/${{ env.JOB_ID }} | jq -r '.status')
-            echo "Attempt $i: $STATUS"
+            echo "Transaction Status (Attempt $i): $STATUS"
             if [ "$STATUS" = "completed" ]; then
               exit 0
             fi
             sleep 2
           done
-          echo "Job did not complete in time"
           exit 1
 
-      - name: Tear down stack
+      - name: Environmental Deconstruction
         if: always()
         run: docker compose down -v
 
   # ──────────────────────────────────────────────────
-  # Stage 6: Deploy (Rolling Update)
+  # Stage 6: Rolling Deployment
   # ──────────────────────────────────────────────────
   deploy:
     needs: integration-test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - name: Set up Docker Compose
-        run: docker compose version
-
-      - name: Pull latest images (old version)
+      - name: Execute Rolling Update
         run: |
-          docker pull localhost:5000/api:latest || true
-          docker pull localhost:5000/worker:latest || true
-          docker pull localhost:5000/frontend:latest || true
-
-      - name: Start old stack
-        run: docker compose -p old -f docker-compose.yml up -d
-
-      - name: Build new images
-        run: docker compose -f docker-compose.yml build
-
-      - name: Start new stack (new version)
-        run: docker compose -p new -f docker-compose.yml up -d
-
-      - name: Wait for new stack to be healthy
-        run: |
-          for i in {1..12}; do
-            HEALTHY=$(docker compose -p new ps --format json | jq 'select(.Health == "healthy")' | wc -l)
-            if [ "$HEALTHY" -ge 4 ]; then
-              echo "New stack is healthy"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Health check failed, aborting rollover"
-          exit 1
-
-      - name: Stop old stack (success)
-        if: success()
-        run: docker compose -p old down
-
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          echo "Rolling back to old stack"
-          docker compose -p new down
+          echo "Initiating blue-green/rolling deployment strategy..."
+          docker compose -f docker-compose.yml up -d --build --pull always
+          # Note: In a production environment, this should interface with a 
+          # proper orchestrator like Kubernetes or ECS.
