@@ -2,18 +2,16 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
-  # ──────────────────────────────────────────────────
   # Stage 1: Lint
-  # ──────────────────────────────────────────────────
   lint:
     runs-on: ubuntu-latest
     env:
@@ -24,7 +22,6 @@ jobs:
 
       - name: Lint Python (flake8)
         run: |
-          python -m pip install --upgrade pip
           pip install flake8
           flake8 api/ || true
 
@@ -34,11 +31,6 @@ jobs:
           npm ci || npm install
           npm install eslint --save-dev
           npx eslint app.js || true
-
-      - name: List Dockerfiles (debug)
-        run: |
-          echo "Dockerfiles found:"
-          find . -type f -name Dockerfile -print
 
       - name: Lint API Dockerfile (hadolint)
         uses: hadolint/hadolint-action@v3.1.0
@@ -55,9 +47,7 @@ jobs:
         with:
           dockerfile: frontend/Dockerfile
 
-  # ──────────────────────────────────────────────────
   # Stage 2: Test
-  # ──────────────────────────────────────────────────
   test:
     needs: lint
     runs-on: ubuntu-latest
@@ -68,24 +58,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
           cd api
           pip install -r requirements.txt
-          pip install pytest pytest-cov fakeredis httpx
 
       - name: Run unit tests with coverage
         run: |
           cd api
-          pytest --cov=app --cov-report=xml:coverage.xml --cov-report=html
-
-      - name: List generated files (debug)
-        run: |
-          echo "Contents of api directory:"
-          ls -la api/
+          pytest --cov=app --cov-report=xml:coverage.xml
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -93,55 +76,62 @@ jobs:
           name: coverage-report
           path: api/coverage.xml
 
-  # ──────────────────────────────────────────────────
-  # Stage 3: Build (Option B: build ONLY :latest)
-  # ──────────────────────────────────────────────────
+  # Stage 3: Build (with local registry, SHA+latest tags, caching)
   build:
     needs: test
     runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
 
-      - name: Build API image (local, latest)
+      - name: Build & push API (SHA + latest)
         uses: docker/build-push-action@v5
         with:
           context: ./api
-          push: false
-          load: true
+          push: true
           tags: |
-            api:latest
+            localhost:5000/api:${{ github.sha }}
+            localhost:5000/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Build Worker image (local, latest)
+      - name: Build & push Worker (SHA + latest)
         uses: docker/build-push-action@v5
         with:
           context: ./worker
-          push: false
-          load: true
+          push: true
           tags: |
-            worker:latest
+            localhost:5000/worker:${{ github.sha }}
+            localhost:5000/worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Build Frontend image (local, latest)
+      - name: Build & push Frontend (SHA + latest)
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
-          push: false
-          load: true
+          push: true
           tags: |
-            frontend:latest
+            localhost:5000/frontend:${{ github.sha }}
+            localhost:5000/frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Debug built images (ensure tags exist)
+      - name: Save images as tarballs
         run: |
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | sed -n '1p;/^api\|^worker\|^frontend/p'
-
-      - name: Save images as tarballs (latest)
-        run: |
-          docker save api:latest -o api.tar
-          docker save worker:latest -o worker.tar
-          docker save frontend:latest -o frontend.tar
+          docker save localhost:5000/api:${{ github.sha }} -o api.tar
+          docker save localhost:5000/worker:${{ github.sha }} -o worker.tar
+          docker save localhost:5000/frontend:${{ github.sha }} -o frontend.tar
 
       - name: Upload image artifacts
         uses: actions/upload-artifact@v4
@@ -151,18 +141,12 @@ jobs:
             api.tar
             worker.tar
             frontend.tar
-          retention-days: 1
 
-  # ──────────────────────────────────────────────────
-  # Stage 4: Security Scan (scan :latest images)
-  # ──────────────────────────────────────────────────
+  # Stage 4: Security Scan (uses SHA tag from tarballs)
   security-scan:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
       - name: Download image artifacts
         uses: actions/download-artifact@v4
         with:
@@ -174,54 +158,39 @@ jobs:
           docker load -i worker.tar
           docker load -i frontend.tar
 
-      - name: Run Trivy vulnerability scanner on API
+      - name: Scan API (SHA tag)
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: api:latest
-          format: sarif
-          output: trivy-results-api.sarif
-          severity: CRITICAL
-          exit-code: "0"
+          image-ref: 'api:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-api.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
 
-      - name: Run Trivy on Worker
+      - name: Scan Worker
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: worker:latest
-          format: sarif
-          output: trivy-results-worker.sarif
-          severity: CRITICAL
-          exit-code: "0"
+          image-ref: 'worker:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-worker.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
 
-      - name: Run Trivy on Frontend
+      - name: Scan Frontend
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: frontend:latest
-          format: sarif
-          output: trivy-results-frontend.sarif
-          severity: CRITICAL
-          exit-code: "0"
+          image-ref: 'frontend:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-frontend.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
 
-      - name: Upload SARIF (API)
+      - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: trivy-results-api.sarif
-          category: trivy-api
+          sarif_file: 'trivy-api.sarif,trivy-worker.sarif,trivy-frontend.sarif'
 
-      - name: Upload SARIF (Worker)
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results-worker.sarif
-          category: trivy-worker
-
-      - name: Upload SARIF (Frontend)
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results-frontend.sarif
-          category: trivy-frontend
-
-  # ──────────────────────────────────────────────────
   # Stage 5: Integration Test
-  # ──────────────────────────────────────────────────
   integration-test:
     needs: security-scan
     runs-on: ubuntu-latest
@@ -229,62 +198,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install tooling (jq, curl)
+      - name: Install system tools
+        run: sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Run integration script
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl
+          chmod +x tests/integration.sh
+          ./tests/integration.sh
 
-      - name: Set up Docker Compose
-        run: docker compose version
-
-      - name: Start the full stack
-        run: docker compose -f docker-compose.yml up -d --build
-
-      - name: Wait for services to be healthy
-        run: |
-          for i in {1..12}; do
-            HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l | tr -d ' ')
-            if [ "$HEALTHY" -ge 4 ]; then
-              echo "All services healthy"
-              docker compose ps
-              exit 0
-            fi
-            echo "Waiting for healthy services... ($i/12) healthy=$HEALTHY"
-            docker compose ps || true
-            sleep 5
-          done
-          echo "Services did not become healthy in time"
-          docker compose logs --no-color || true
-          exit 1
-
-      - name: Submit a job via frontend
-        run: |
-          JOB_ID=$(curl -s -X POST http://localhost:3000/submit -H "Content-Type: application/json" | jq -r '.job_id')
-          echo "JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
-          echo "Submitted JOB_ID=$JOB_ID"
-
-      - name: Poll job until completed
-        run: |
-          for i in {1..30}; do
-            STATUS=$(curl -s "http://localhost:3000/status/${JOB_ID}" | jq -r '.status')
-            echo "Attempt $i: $STATUS"
-            if [ "$STATUS" = "completed" ]; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Job did not complete in time"
-          docker compose logs --no-color || true
-          exit 1
-
-      - name: Tear down stack
-        if: always()
-        run: docker compose down -v || true
-
-  # ──────────────────────────────────────────────────
-  # Stage 6: Deploy (Rolling Update - local runner simulation)
-  # NOTE: With Option B, your compose should point at :latest.
-  # ──────────────────────────────────────────────────
+  # Stage 6: Deploy (rolling update simulation)
   deploy:
     needs: integration-test
     if: github.ref == 'refs/heads/main'
@@ -293,47 +215,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Docker Compose
-        run: docker compose version
-
-      - name: Pull latest images (best effort)
-        run: |
-          docker pull localhost:5000/api:latest || true
-          docker pull localhost:5000/worker:latest || true
-          docker pull localhost:5000/frontend:latest || true
-
       - name: Start old stack
         run: docker compose -p old -f docker-compose.yml up -d --build
 
       - name: Build new images
         run: docker compose -f docker-compose.yml build
 
-      - name: Start new stack (new version)
-        run: API_PORT_PUBLISH=18000 FRONTEND_PORT_PUBLISH=13000 docker compose -p new -f docker-compose.yml up -d
-
-      - name: Wait for new stack to be healthy
+      - name: Start new stack
         run: |
+          docker compose -p new -f docker-compose.yml up -d
           for i in {1..12}; do
-            HEALTHY=$(docker compose -p new ps --format json | jq 'select(.Health == "healthy")' | wc -l | tr -d ' ')
+            HEALTHY=$(docker compose -p new ps --format json | jq 'select(.Health == "healthy")' | wc -l)
             if [ "$HEALTHY" -ge 4 ]; then
-              echo "New stack is healthy"
-              docker compose -p new ps
+              echo "New stack healthy"
+              docker compose -p old down || true
               exit 0
             fi
-            echo "Waiting for new stack health... ($i/12) healthy=$HEALTHY"
-            docker compose -p new ps || true
             sleep 5
           done
-          echo "Health check failed, aborting rollover"
-          docker compose -p new logs --no-color || true
-          exit 1
-
-      - name: Stop old stack (success)
-        if: success()
-        run: docker compose -p old down || true
-
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          echo "Rolling back to old stack"
+          echo "Health check failed, rolling back"
           docker compose -p new down || true
+          exit 1

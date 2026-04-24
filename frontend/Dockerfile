@@ -6,12 +6,11 @@ RUN npm ci --only=production
 FROM node:18-slim
 WORKDIR /app
 
-# Install curl and ca-certificates
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-RUN useradd -ms /bin/bash appuser
+RUN useradd -m appuser
 RUN chown -R appuser:appuser /app
 
 COPY --from=builder --chown=appuser:appuser /app/node_modules ./node_modules

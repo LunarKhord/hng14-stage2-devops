@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
     networks:
       - hng-internal
-    # No ports – Redis is private
+    # No ports exposed → Redis is now fully internal
 
   api:
     build: ./api

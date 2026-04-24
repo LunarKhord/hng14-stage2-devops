@@ -6,8 +6,7 @@ RUN pip install --user --no-cache-dir -r requirements.txt
 FROM python:3.11-slim
 WORKDIR /app
 
-# Create non‑root user
-RUN useradd -ms /bin/bash appuser
+RUN useradd -m appuser
 RUN chown -R appuser:appuser /app
 
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
