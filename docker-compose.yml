@@ -1,66 +1,102 @@
-version: "3.9"
+version: '3.8'
 
 services:
   redis:
-    image: redis:7-alpine
-    ports:
-      - "6379"
+    image: redis:alpine
+    container_name: redis
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  api:
-    image: api:latest
-    build:
-      context: ./api
-    ports:
-      - "${API_PORT_PUBLISH:-8000}:8000"
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || curl -fsS http://localhost:8000/ || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-
-  worker:
-    image: worker:latest
-    build:
-      context: ./worker
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - API_URL=http://api:8000
-    depends_on:
-      redis:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep -v grep | grep -q ."]
       interval: 10s
       timeout: 5s
-      retries: 30
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    restart: unless-stopped
+    networks:
+      - hng-internal
+    # No ports – Redis is private
+
+  api:
+    build: ./api
+    container_name: api
+    environment:
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - hng-internal
+
+  worker:
+    build: ./worker
+    container_name: worker
+    environment:
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      WORK_DURATION: ${WORK_DURATION:-2}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*worker.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - hng-internal
 
   frontend:
-    image: frontend:latest
-    build:
-      context: ./frontend
-    ports:
-      - "${FRONTEND_PORT_PUBLISH:-3000}:3000"
+    build: ./frontend
+    container_name: frontend
     environment:
-      - API_URL=http://api:8000
+      API_URL: ${API_URL:-http://api:8000}
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/ || exit 1"]
-      interval: 5s
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/health"]
+      interval: 30s
       timeout: 5s
-      retries: 30
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - hng-internal
+
+networks:
+  hng-internal:
+    name: hng-internal
+    driver: bridge

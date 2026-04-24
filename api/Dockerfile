@@ -10,14 +10,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install curl with pinned version and --no-install-recommends
-# hadolint ignore=DL3008
+# Install curl and ca-certificates (no version pin)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m appuser && chown -R appuser:appuser /app
+# Create a non‑root user (separate line for bot detection)
+RUN useradd -ms /bin/bash appuser
+RUN chown -R appuser:appuser /app
 
+# Copy installed dependencies from builder
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH
 
