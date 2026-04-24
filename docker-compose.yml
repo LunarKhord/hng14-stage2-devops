@@ -16,7 +16,7 @@ services:
     build:
       context: ./api
     ports:
-      - "8000:8000"
+      - "${API_PORT_PUBLISH:-8000}:8000"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -53,7 +53,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT_PUBLISH:-3000}:3000"
     environment:
       - API_URL=http://api:8000
     depends_on:

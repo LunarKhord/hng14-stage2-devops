@@ -309,7 +309,7 @@ jobs:
         run: docker compose -f docker-compose.yml build
 
       - name: Start new stack (new version)
-        run: docker compose -p new -f docker-compose.yml up -d
+        run: API_PORT_PUBLISH=18000 FRONTEND_PORT_PUBLISH=13000 docker compose -p new -f docker-compose.yml up -d
 
       - name: Wait for new stack to be healthy
         run: |
