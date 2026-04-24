@@ -12,7 +12,7 @@ services:
       retries: 20
 
   api:
-    image: localhost:5000/api:latest
+    image: api:latest
     ports:
       - "8000:8000"
     environment:
@@ -29,7 +29,7 @@ services:
       retries: 30
 
   worker:
-    image: localhost:5000/worker:latest
+    image: worker:latest
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -47,7 +47,7 @@ services:
       retries: 30
 
   frontend:
-    image: localhost:5000/frontend:latest
+    image: frontend:latest
     ports:
       - "3000:3000"
     environment:
