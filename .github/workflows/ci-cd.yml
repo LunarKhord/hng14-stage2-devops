@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   # ──────────────────────────────────────────────────
@@ -20,12 +20,14 @@ jobs:
 
       - name: Lint Python (flake8)
         run: |
+          python -m pip install --upgrade pip
           pip install flake8
           flake8 api/ || true
 
       - name: Lint JavaScript (eslint)
         run: |
           cd frontend
+          npm ci || npm install
           npm install eslint --save-dev
           npx eslint app.js || true
 
@@ -62,10 +64,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           cd api
           pip install -r requirements.txt
           pip install pytest pytest-cov fakeredis httpx
@@ -87,7 +90,7 @@ jobs:
           path: api/coverage.xml
 
   # ──────────────────────────────────────────────────
-  # Stage 3: Build (FIXED)
+  # Stage 3: Build (FIXED: build locally + load, then docker save)
   # ──────────────────────────────────────────────────
   build:
     needs: test
@@ -129,7 +132,7 @@ jobs:
             frontend:${{ github.sha }}
             frontend:latest
 
-      - name: Debug built images
+      - name: Debug built images (ensure tags exist)
         run: |
           docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | sed -n '1p;/^api\|^worker\|^frontend/p'
 
@@ -170,31 +173,31 @@ jobs:
       - name: Run Trivy vulnerability scanner on API
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'api:${{ github.sha }}'
-          format: 'sarif'
-          output: 'trivy-results-api.sarif'
-          severity: 'CRITICAL'
-          exit-code: '1'
+          image-ref: api:${{ github.sha }}
+          format: sarif
+          output: trivy-results-api.sarif
+          severity: CRITICAL
+          exit-code: "1"
 
       - name: Run Trivy on Worker
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'worker:${{ github.sha }}'
-          format: 'sarif'
-          output: 'trivy-results-worker.sarif'
-          severity: 'CRITICAL'
-          exit-code: '1'
+          image-ref: worker:${{ github.sha }}
+          format: sarif
+          output: trivy-results-worker.sarif
+          severity: CRITICAL
+          exit-code: "1"
 
       - name: Run Trivy on Frontend
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'frontend:${{ github.sha }}'
-          format: 'sarif'
-          output: 'trivy-results-frontend.sarif'
-          severity: 'CRITICAL'
-          exit-code: '1'
+          image-ref: frontend:${{ github.sha }}
+          format: sarif
+          output: trivy-results-frontend.sarif
+          severity: CRITICAL
+          exit-code: "1"
 
-      # upload-sarif only takes ONE file per step; do 3 steps
+      # upload-sarif supports a single file per step
       - name: Upload SARIF (API)
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -220,34 +223,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Install tooling (jq, curl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
       - name: Set up Docker Compose
         run: docker compose version
 
       - name: Start the full stack
-        run: docker compose -f docker-compose.yml up -d
+        run: docker compose -f docker-compose.yml up -d --build
 
       - name: Wait for services to be healthy
         run: |
           for i in {1..12}; do
-            HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l)
+            HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l | tr -d ' ')
             if [ "$HEALTHY" -ge 4 ]; then
               echo "All services healthy"
+              docker compose ps
               exit 0
             fi
+            echo "Waiting for healthy services... ($i/12) healthy=$HEALTHY"
+            docker compose ps || true
             sleep 5
           done
           echo "Services did not become healthy in time"
+          docker compose logs --no-color || true
           exit 1
 
       - name: Submit a job via frontend
         run: |
           JOB_ID=$(curl -s -X POST http://localhost:3000/submit -H "Content-Type: application/json" | jq -r '.job_id')
-          echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
+          echo "JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
+          echo "Submitted JOB_ID=$JOB_ID"
 
       - name: Poll job until completed
         run: |
           for i in {1..30}; do
-            STATUS=$(curl -s http://localhost:3000/status/${{ env.JOB_ID }} | jq -r '.status')
+            STATUS=$(curl -s "http://localhost:3000/status/${JOB_ID}" | jq -r '.status')
             echo "Attempt $i: $STATUS"
             if [ "$STATUS" = "completed" ]; then
               exit 0
@@ -255,6 +268,7 @@ jobs:
             sleep 2
           done
           echo "Job did not complete in time"
+          docker compose logs --no-color || true
           exit 1
 
       - name: Tear down stack
@@ -262,7 +276,7 @@ jobs:
         run: docker compose down -v
 
   # ──────────────────────────────────────────────────
-  # Stage 6: Deploy (Rolling Update)
+  # Stage 6: Deploy (Rolling Update - local runner simulation)
   # ──────────────────────────────────────────────────
   deploy:
     needs: integration-test
@@ -275,16 +289,17 @@ jobs:
       - name: Set up Docker Compose
         run: docker compose version
 
-      # NOTE: these localhost:5000 pulls only work if you have a real reachable registry in deploy env.
-      # Keeping your logic as-is, but this won't pull anything in GitHub-hosted runners.
-      - name: Pull latest images (old version)
+      # NOTE:
+      # Pulling from localhost:5000 on GitHub runners won't work unless you run a registry here.
+      # Keeping this as a best-effort no-op.
+      - name: Pull latest images (old version) - best effort
         run: |
           docker pull localhost:5000/api:latest || true
           docker pull localhost:5000/worker:latest || true
           docker pull localhost:5000/frontend:latest || true
 
       - name: Start old stack
-        run: docker compose -p old -f docker-compose.yml up -d
+        run: docker compose -p old -f docker-compose.yml up -d --build
 
       - name: Build new images
         run: docker compose -f docker-compose.yml build
@@ -295,14 +310,18 @@ jobs:
       - name: Wait for new stack to be healthy
         run: |
           for i in {1..12}; do
-            HEALTHY=$(docker compose -p new ps --format json | jq 'select(.Health == "healthy")' | wc -l)
+            HEALTHY=$(docker compose -p new ps --format json | jq 'select(.Health == "healthy")' | wc -l | tr -d ' ')
             if [ "$HEALTHY" -ge 4 ]; then
               echo "New stack is healthy"
+              docker compose -p new ps
               exit 0
             fi
+            echo "Waiting for new stack health... ($i/12) healthy=$HEALTHY"
+            docker compose -p new ps || true
             sleep 5
           done
           echo "Health check failed, aborting rollover"
+          docker compose -p new logs --no-color || true
           exit 1
 
       - name: Stop old stack (success)
