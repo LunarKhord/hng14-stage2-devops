@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  # remove host port publishing for the "new" stack to avoid conflicts with "old"
+  redis:
+    ports: []
+
+  api:
+    ports: []
+
+  frontend:
+    ports: []

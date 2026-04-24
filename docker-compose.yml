@@ -24,7 +24,6 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      # adjust if your API has a different health endpoint
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || curl -fsS http://localhost:8000/ || exit 1"]
       interval: 5s
       timeout: 5s
@@ -44,7 +43,6 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      # worker often has no HTTP port; this just checks the container is up
       test: ["CMD-SHELL", "ps aux | grep -v grep | grep -q ."]
       interval: 10s
       timeout: 5s
