@@ -29,10 +29,25 @@ jobs:
           npm install eslint --save-dev
           npx eslint app.js || true
 
-      - name: Lint Dockerfiles (hadolint)
+      - name: List Dockerfiles (debug)
+        run: |
+          echo "Dockerfiles found:"
+          find . -type f -name Dockerfile -print
+
+      - name: Lint API Dockerfile (hadolint)
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: "**/Dockerfile"
+          dockerfile: api/Dockerfile
+
+      - name: Lint Worker Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: worker/Dockerfile
+
+      - name: Lint Frontend Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/Dockerfile
 
   # ──────────────────────────────────────────────────
   # Stage 2: Test
