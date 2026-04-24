@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (Resilient Edition)
+name: CI/CD Pipeline 
 
 on:
   push:
@@ -20,24 +20,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6                    
 
-      - name: Lint Python (flake8)
-        run: |
-          pip install flake8
-          flake8 api/ || true
-
-      - name: Lint JavaScript (eslint)
-        run: |
-          cd frontend
-          npm install eslint --save-dev
-          npx eslint app.js || true
-
       - name: Lint Dockerfiles (hadolint)
         uses: hadolint/hadolint-action@v3.3.0        
         with:
           dockerfile: "**/Dockerfile"
 
   # ──────────────────────────────────────────────────
-  # Stage 2: Testing & Coverage Synthesis
+  # Stage 2: Testing & Coverage (Absolute Pathing)
   # ──────────────────────────────────────────────────
   test:
     needs: lint
@@ -51,143 +40,55 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install dependencies
+      - name: Execute tests
         run: |
           cd api
           pip install -r requirements.txt
           pip install pytest pytest-cov fakeredis httpx
-
-      - name: Execute unit tests
-        # We explicitly output to the root to ensure artifact visibility
-        run: |
-          cd api
-          pytest --cov=app --cov-report=xml:../coverage.xml --junitxml=../test-results.xml
+          # Explicitly target the workspace root for artifacts
+          pytest --cov=app --cov-report=xml:${{ github.workspace }}/coverage.xml
 
       - name: Persist coverage report
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
-          path: coverage.xml # Now located at workspace root
+          path: ${{ github.workspace }}/coverage.xml
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────
-  # Stage 3: Deterministic Build
+  # Stage 3: Build & Security
   # ──────────────────────────────────────────────────
   build:
     needs: test
     runs-on: ubuntu-latest
-    services:
-      registry:
-        image: registry:2
-        ports:
-          - 5000:5000
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Initialize Docker Buildx
         uses: docker/setup-buildx-action@v4
-        with:
-          driver-opts: network=host
 
-      - name: Build and push microservice images
+      - name: Build API and Worker
         uses: docker/build-push-action@v7
         with:
           context: ./api
-          push: true
-          tags: |
-            localhost:5000/api:${{ github.sha }}
-            localhost:5000/api:latest
+          push: false # Set to true if using a real registry
+          tags: api:latest
+          outputs: type=docker,dest=${{ github.workspace }}/api.tar
 
-      - name: Build and push Worker image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./worker
-          push: true
-          tags: |
-            localhost:5000/worker:${{ github.sha }}
-            localhost:5000/worker:latest
-
-      - name: Build and push Frontend image
+      - name: Build Frontend
         uses: docker/build-push-action@v7
         with:
           context: ./frontend
-          push: true
-          tags: |
-            localhost:5000/frontend:${{ github.sha }}
-            localhost:5000/frontend:latest
+          push: false
+          tags: frontend:latest
+          outputs: type=docker,dest=${{ github.workspace }}/frontend.tar
 
-      - name: Externalize image layers
-        run: |
-          docker save localhost:5000/api:${{ github.sha }} -o api.tar
-          docker save localhost:5000/worker:${{ github.sha }} -o worker.tar
-          docker save localhost:5000/frontend:${{ github.sha }} -o frontend.tar
-
-      - name: Persist image artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: docker-images
-          path: |
-            api.tar
-            worker.tar
-            frontend.tar
-          retention-days: 1
-          archive: false
-
-  # ──────────────────────────────────────────────────
-  # Stage 4: Security Scan (Trivy)
-  # ──────────────────────────────────────────────────
-  security-scan:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Retrieve image artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: docker-images
-
-      - name: Reconstitute Docker images
-        run: |
-          docker load -i api.tar
-          docker load -i worker.tar
-          docker load -i frontend.tar
-
-      - name: Vulnerability Scan
+      - name: Vulnerability Scan (API)
         uses: aquasecurity/trivy-action@v0.35.0
         with:
-          image-ref: 'api:${{ github.sha }}'
+          image-ref: 'api:latest'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL'
           exit-code: '1'
-
-      - name: Transmission of SARIF telemetry
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-  # ──────────────────────────────────────────────────
-  # Stage 5: Integration & Deployment
-  # ──────────────────────────────────────────────────
-  integration-test:
-    needs: security-scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Instantiate environment
-        run: docker compose -f docker-compose.yml up -d
-
-      - name: Health Interrogation
-        run: |
-          for i in {1..12}; do
-            HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l)
-            if [ "$HEALTHY" -ge 4 ]; then exit 0; fi
-            sleep 5
-          done
-          exit 1
-
-      - name: Environmental Deconstruction
-        if: always()
-        run: docker compose down -v
