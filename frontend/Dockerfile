@@ -10,11 +10,11 @@ FROM node:18-slim
 
 WORKDIR /app
 
-# Install curl with pinned version and --no-install-recommends
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl=7.88.1-* && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+    
 RUN useradd -m appuser && chown -R appuser:appuser /app
 
 COPY --from=builder --chown=appuser:appuser /app/node_modules ./node_modules
