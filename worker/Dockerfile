@@ -28,12 +28,11 @@ WORKDIR /app
 # Note: The healthcheck utilizes 'pgrep', which is provided by the 'procps' package.
 # We maintain 'curl' if external interrogation is required, but focus here 
 # on the requirements for your specific healthcheck logic.
+# Revised APT instruction for API, Worker, and Frontend
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl=8.12.1-2 \
-        procps=2:4.0.4-5 && \
+        curl=8.* && \
     rm -rf /var/lib/apt/lists/*
-
 # Creation of an unprivileged system user to satisfy the Principle of Least Privilege.
 RUN useradd --create-home --system --no-log-init appuser && \
     chown -R appuser:appuser /app

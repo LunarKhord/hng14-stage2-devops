@@ -22,11 +22,11 @@ WORKDIR /app
 # Install curl with explicit version pinning and omission of recommended packages.
 # The version '8.12.1-2' corresponds to the stable release for Debian 13 (Trixie), 
 # which is the prevailing standard for 2026 infrastructure.
+# Revised APT instruction for API, Worker, and Frontend
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl=8.12.1-2 && \
+        curl=8.* && \
     rm -rf /var/lib/apt/lists/*
-
 # Establish a restricted system user to adhere to the Principle of Least Privilege.
 # Using --no-log-init prevents the creation of excessively large sparse files in certain runtimes.
 RUN useradd --create-home --system --no-log-init appuser && \

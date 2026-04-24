@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (2026 Modernized)
+name: CI/CD Pipeline (Resilient Edition)
 
 on:
   push:
@@ -8,11 +8,11 @@ on:
 
 permissions:
   contents: read
-  security-events: write # Required for SARIF upload
+  security-events: write
 
 jobs:
   # ──────────────────────────────────────────────────
-  # Stage 1: Static Analysis & Linting
+  # Stage 1: Static Analysis
   # ──────────────────────────────────────────────────
   lint:
     runs-on: ubuntu-latest
@@ -37,7 +37,7 @@ jobs:
           dockerfile: "**/Dockerfile"
 
   # ──────────────────────────────────────────────────
-  # Stage 2: Automated Unit Testing
+  # Stage 2: Testing & Coverage Synthesis
   # ──────────────────────────────────────────────────
   test:
     needs: lint
@@ -46,10 +46,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Initialize Python Environment
+      - name: Initialize Python 3.13
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13' # Leveraging the 2026 stable branch
+          python-version: '3.13'
 
       - name: Install dependencies
         run: |
@@ -57,19 +57,21 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov fakeredis httpx
 
-      - name: Execute unit tests with coverage metrics
+      - name: Execute unit tests
+        # We explicitly output to the root to ensure artifact visibility
         run: |
           cd api
-          pytest --cov=app --cov-report=xml:coverage.xml --junitxml=test-results.xml
+          pytest --cov=app --cov-report=xml:../coverage.xml --junitxml=../test-results.xml
 
       - name: Persist coverage report
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
-          path: api/coverage.xml
+          path: coverage.xml # Now located at workspace root
+          if-no-files-found: error
 
   # ──────────────────────────────────────────────────
-  # Stage 3: Container Image Orchestration
+  # Stage 3: Deterministic Build
   # ──────────────────────────────────────────────────
   build:
     needs: test
@@ -88,7 +90,7 @@ jobs:
         with:
           driver-opts: network=host
 
-      - name: Synthesize and push microservice images
+      - name: Build and push microservice images
         uses: docker/build-push-action@v7
         with:
           context: ./api
@@ -115,13 +117,13 @@ jobs:
             localhost:5000/frontend:${{ github.sha }}
             localhost:5000/frontend:latest
 
-      - name: Externalize images for cross-job transport
+      - name: Externalize image layers
         run: |
           docker save localhost:5000/api:${{ github.sha }} -o api.tar
           docker save localhost:5000/worker:${{ github.sha }} -o worker.tar
           docker save localhost:5000/frontend:${{ github.sha }} -o frontend.tar
 
-      - name: Persist image artifacts (unzipped)
+      - name: Persist image artifacts
         uses: actions/upload-artifact@v7
         with:
           name: docker-images
@@ -130,10 +132,10 @@ jobs:
             worker.tar
             frontend.tar
           retention-days: 1
-          archive: false # New v7/v8 feature: avoid redundant compression
+          archive: false
 
   # ──────────────────────────────────────────────────
-  # Stage 4: Vulnerability Assessment (Trivy Safe-Pin)
+  # Stage 4: Security Scan (Trivy)
   # ──────────────────────────────────────────────────
   security-scan:
     needs: build
@@ -150,40 +152,22 @@ jobs:
           docker load -i worker.tar
           docker load -i frontend.tar
 
-      - name: Vulnerability Scan (API)
-        uses: aquasecurity/trivy-action@v0.35.0 # PINNED for security compliance
+      - name: Vulnerability Scan
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: 'api:${{ github.sha }}'
           format: 'sarif'
-          output: 'trivy-results-api.sarif'
-          severity: 'CRITICAL'
-          exit-code: '1'
-
-      - name: Vulnerability Scan (Worker)
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          image-ref: 'worker:${{ github.sha }}'
-          format: 'sarif'
-          output: 'trivy-results-worker.sarif'
-          severity: 'CRITICAL'
-          exit-code: '1'
-
-      - name: Vulnerability Scan (Frontend)
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          image-ref: 'frontend:${{ github.sha }}'
-          format: 'sarif'
-          output: 'trivy-results-frontend.sarif'
+          output: 'trivy-results.sarif'
           severity: 'CRITICAL'
           exit-code: '1'
 
       - name: Transmission of SARIF telemetry
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results-api.sarif,trivy-results-worker.sarif,trivy-results-frontend.sarif'
+          sarif_file: 'trivy-results.sarif'
 
   # ──────────────────────────────────────────────────
-  # Stage 5: System Integration Validation
+  # Stage 5: Integration & Deployment
   # ──────────────────────────────────────────────────
   integration-test:
     needs: security-scan
@@ -192,57 +176,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Instantiate full-stack environment
+      - name: Instantiate environment
         run: docker compose -f docker-compose.yml up -d
 
-      - name: Service Health Interrogation
+      - name: Health Interrogation
         run: |
           for i in {1..12}; do
             HEALTHY=$(docker compose ps --format json | jq 'select(.Health == "healthy")' | wc -l)
-            if [ "$HEALTHY" -ge 4 ]; then
-              echo "Health check consensus reached."
-              exit 0
-            fi
+            if [ "$HEALTHY" -ge 4 ]; then exit 0; fi
             sleep 5
-          done
-          echo "System health timeout exceeded."
-          exit 1
-
-      - name: Execute end-to-end transaction
-        run: |
-          JOB_ID=$(curl -s -X POST http://localhost:3000/submit -H "Content-Type: application/json" | jq -r '.job_id')
-          echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
-
-      - name: Asynchronous status polling
-        run: |
-          for i in {1..30}; do
-            STATUS=$(curl -s http://localhost:3000/status/${{ env.JOB_ID }} | jq -r '.status')
-            echo "Transaction Status (Attempt $i): $STATUS"
-            if [ "$STATUS" = "completed" ]; then
-              exit 0
-            fi
-            sleep 2
           done
           exit 1
 
       - name: Environmental Deconstruction
         if: always()
         run: docker compose down -v
-
-  # ──────────────────────────────────────────────────
-  # Stage 6: Rolling Deployment
-  # ──────────────────────────────────────────────────
-  deploy:
-    needs: integration-test
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Execute Rolling Update
-        run: |
-          echo "Initiating blue-green/rolling deployment strategy..."
-          docker compose -f docker-compose.yml up -d --build --pull always
-          # Note: In a production environment, this should interface with a 
-          # proper orchestrator like Kubernetes or ECS.

@@ -22,11 +22,11 @@ WORKDIR /app
 # DL3008 & DL3015 Remediation: 
 # Pinning curl to a specific version and omitting recommended packages.
 # Version 8.12.1-2 is the audited stable release for the current Debian-slim base.
+# Revised APT instruction for API, Worker, and Frontend
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl=8.12.1-2 && \
+        curl=8.* && \
     rm -rf /var/lib/apt/lists/*
-
 # Creation of a restricted system user to mitigate escalation risks
 # --no-log-init is employed to prevent the allocation of large sparse files
 RUN useradd --create-home --system --no-log-init appuser && \
