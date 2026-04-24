@@ -10,11 +10,11 @@ FROM node:18-slim
 
 WORKDIR /app
 
+# hadolint ignore=DL3008
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-    
 RUN useradd -m appuser && chown -R appuser:appuser /app
 
 COPY --from=builder --chown=appuser:appuser /app/node_modules ./node_modules
