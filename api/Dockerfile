@@ -1,38 +1,44 @@
-# Stage 1: Dependency Synthesis (Builder)
-FROM python:3.13-slim AS builder
+# Stage 1: Builder – install dependencies
+FROM python:3.11-slim AS builder
+
 WORKDIR /app
+
+# Only copy requirements to leverage Docker cache
 COPY requirements.txt .
-# Install dependencies into the local user space to minimize image bloat
+
+# Install production dependencies into a user-local directory
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Stage 2: Hardened Runtime
-FROM python:3.13-slim
+# Stage 2: Final image – slim and secure
+FROM python:3.11-slim
+
 WORKDIR /app
 
-# Environmental Hardening
-ENV PATH="/home/appuser/.local/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# Resilient APT: Major version pinning to bypass Debian repository volatility (Exit 100)
+# Install curl for the HEALTHCHECK
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        curl="8.*" && \
+    apt-get install -y curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Principle of Least Privilege: Restricted System User
-RUN useradd --create-home --system --no-log-init appuser && \
-    chown -R appuser:appuser /app
+# Create a non‑root user and change ownership of the app directory
+RUN useradd -m appuser && chown -R appuser:appuser /app
 
-# Translocate pre-compiled artifacts from builder
+# Copy installed dependencies from the builder stage,
+# placing them into the user's home and fixing permissions
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
+
+# Ensure the user's local bin is on PATH
+ENV PATH=/home/appuser/.local/bin:$PATH
+
+# Copy the application code, owned by appuser
 COPY --chown=appuser:appuser . .
 
+# Switch to the non‑root user
 USER appuser
 
-# Network Ingress Validation
+# Health check – calls the /health endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl --fail http://localhost:8000/health || exit 1
+  CMD curl --fail http://localhost:8000/health || exit 1
 
 EXPOSE 8000
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
